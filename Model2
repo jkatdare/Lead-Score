@@ -59,7 +59,7 @@ def engineer_features(df_core):
 
     # We check the necessary columns needed to calculate the ratios are present
     required_for_ratios = [
-        'Policy Face Value', 'Household Annual Income', 
+        'Policy Face Value', 'Household Annual Income',
         'Annualized Premiums', 'Net Worth', 'Market Value of Home'
     ]
     for col in required_for_ratios:
@@ -116,6 +116,8 @@ def generate_propensity_target(df):
 def plot_confusion_matrix(y_true, y_pred, title, filename):
     """Generates a robust confusion matrix visualization."""
     cm = confusion_matrix(y_true, y_pred)
+    
+    # 
 
     plt.figure(figsize=(6, 5))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Greens', cbar=False, annot_kws={"size": 14})
@@ -131,7 +133,7 @@ def plot_confusion_matrix(y_true, y_pred, title, filename):
 
 # --- MAIN PIPELINE ---
 if __name__ == "__main__":
-    print("--- STARTING PROPENSITY MODEL PIPELINE (All Columns + New Core Feature) ---")
+    print("--- STARTING PROPENSITY MODEL PIPELINE (Random Forest - Recall Optimized Only) ---")
 
     # 1. Load Data
     df_raw = load_data(INPUT_FILE)
@@ -142,7 +144,7 @@ if __name__ == "__main__":
 
     # 2. Basic Cleaning & Imputation (for ALL features)
     print("    > Cleaning/Imputing all numerical features...")
-    
+
     # Check for missing CORE_COLS_FOR_ENGINEERING (critical check)
     missing_core_cols = [col for col in CORE_COLS_FOR_ENGINEERING if col not in df_raw.columns]
     if missing_core_cols:
@@ -155,24 +157,18 @@ if __name__ == "__main__":
     # 3. Generate Target (uses relevant columns from CORE_COLS_FOR_ENGINEERING)
     y = generate_propensity_target(df_raw)
 
-    # 4. Feature Engineering (New Step)
-    # Pass only the raw core columns required to calculate the ratios
+    # 4. Feature Engineering
     df_engineered_ratios = engineer_features(df_raw[CORE_COLS_FOR_ENGINEERING])
 
     # 5. Combine All Features
-    # Use ALL_FEATURE_COLS as the raw features
     X_raw = df_raw[ALL_FEATURE_COLS]
-    
+
     # Reset index for clean concat (good practice)
     X_raw = X_raw.reset_index(drop=True)
     df_engineered_ratios = df_engineered_ratios.reset_index(drop=True)
 
     # Combine all raw features with the engineered ratio features
     X_enhanced = pd.concat([X_raw, df_engineered_ratios], axis=1)
-    
-    # Drop duplicate columns if any were inadvertently created (e.g. same column name in raw and engineered)
-    # This specifically happens if we use a column name in ALL_FEATURE_COLS that also exists in the engineered features,
-    # but we are only returning the ratios from engineer_features, so this is safe.
 
     print(f"    > Training with {X_enhanced.shape[1]} features (All Raw Features + Ratios)")
 
@@ -184,20 +180,9 @@ if __name__ == "__main__":
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
 
-    # --- MODEL 1: LOGISTIC REGRESSION (Balanced) ---
-    print("\n--- MODEL 1: LOGISTIC REGRESSION (Balanced) ---")
-    lr_model = LogisticRegression(random_state=42, class_weight='balanced', max_iter=1000)
-    lr_model.fit(X_train_scaled, y_train)
-
-    y_pred_lr = lr_model.predict(X_test_scaled)
-    lr_acc = accuracy_score(y_test, y_pred_lr)
-    lr_rec = recall_score(y_test, y_pred_lr)
-    print(f"    > Accuracy: {lr_acc:.2%}, Recall: {lr_rec:.2%}")
-    print(classification_report(y_test, y_pred_lr))
-    plot_confusion_matrix(y_test, y_pred_lr, 'CM: Logistic Regression (Balanced)', 'propensity_lr_confusion.png')
-
-    # --- MODEL 2: RANDOM FOREST (Recall Optimized) ---
-    print("\n--- MODEL 2: RANDOM FOREST (Recall Optimized) ---")
+    # --- MODEL: RANDOM FOREST (Recall Optimized) ---
+    print("\n--- MODEL: RANDOM FOREST (Recall Optimized) ---")
+    # Uses class_weight='balanced' to force the model to prioritize the minority class (1=Buy)
     rf_rec_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42, class_weight='balanced')
     rf_rec_model.fit(X_train_scaled, y_train)
 
@@ -209,38 +194,19 @@ if __name__ == "__main__":
     plot_confusion_matrix(y_test, y_pred_rf_rec, 'CM: Random Forest (Recall Optimized)', 'propensity_rf_recall_confusion.png')
 
 
-    # --- MODEL 3: RANDOM FOREST (Accuracy Optimized) ---
-    print("\n--- MODEL 3: RANDOM FOREST (Accuracy Optimized) ---")
-    rf_acc_model = RandomForestClassifier(n_estimators=100, max_depth=6, random_state=42, class_weight=None)
-    rf_acc_model.fit(X_train_scaled, y_train)
-
-    y_pred_rf_acc = rf_acc_model.predict(X_test_scaled)
-    rf_acc_acc = accuracy_score(y_test, y_pred_rf_acc)
-    rf_acc_rec = recall_score(y_test, y_pred_rf_acc)
-    print(f"    > Accuracy: {rf_acc_acc:.2%}, Recall: {rf_acc_rec:.2%}")
-    print(classification_report(y_test, y_pred_rf_acc))
-    plot_confusion_matrix(y_test, y_pred_rf_acc, 'CM: Random Forest (Accuracy Optimized)', 'propensity_rf_accuracy_confusion.png')
-
-    # 8. Save Best Model
-    models = {
-        'Logistic Regression (Balanced)': {'model': lr_model, 'recall': lr_rec, 'accuracy': lr_acc},
-        'Random Forest (Recall)': {'model': rf_rec_model, 'recall': rf_rec_rec, 'accuracy': rf_rec_acc},
-        'Random Forest (Accuracy)': {'model': rf_acc_model, 'recall': rf_acc_rec, 'accuracy': rf_acc_acc},
-    }
-
-    best_recall_model = max(models.items(), key=lambda item: item[1]['recall'])
-
-    best_model_name = best_recall_model[0]
-    best_model = best_recall_model[1]['model']
+    # 8. Save Model
+    # Since only one model remains, it is automatically the best model.
+    best_model_name = 'Random Forest (Recall Optimized)'
+    best_model = rf_rec_model
 
     joblib.dump(best_model, os.path.join(OUTPUT_DIR, 'best_propensity_model.pkl'))
     joblib.dump(scaler, os.path.join(OUTPUT_DIR, 'propensity_scaler.pkl'))
 
     print("\n--- PIPELINE COMPLETE ---")
     print("----------------------------------------------------------------------")
-    print(f"    > BEST MODEL SAVED (Prioritizing RECALL): {best_model_name}")
-    print(f"    > Final Recall: {best_recall_model[1]['recall']:.2%}")
-    print(f"    > Final Accuracy: {best_recall_model[1]['accuracy']:.2%}")
+    print(f"    > FINAL MODEL SAVED: {best_model_name}")
+    print(f"    > Final Recall: {rf_rec_rec:.2%}")
+    print(f"    > Final Accuracy: {rf_rec_acc:.2%}")
     print(f"    > Output directory: {OUTPUT_DIR}")
     print("----------------------------------------------------------------------")
 
@@ -253,20 +219,9 @@ if __name__ == "__main__":
     # Create a DataFrame to hold importance data
     importance_df = pd.DataFrame({'Feature': feature_names})
 
-    # Check model type to extract the right metrics
-    if hasattr(best_model, 'feature_importances_'):
-        # Random Forest logic
-        importance_df['Importance'] = best_model.feature_importances_
-        title = f'Feature Importance: {best_model_name}'
-
-    elif hasattr(best_model, 'coef_'):
-        # Logistic Regression logic (using coefficients)
-        importance_df['Importance'] = best_model.coef_[0]
-        title = f'Feature Coefficients: {best_model_name}'
-
-    else:
-        importance_df['Importance'] = 0
-        title = 'Feature Importance Not Available'
+    # Get feature importance (Random Forest logic)
+    importance_df['Importance'] = best_model.feature_importances_
+    title = f'Feature Importance: {best_model_name}'
 
     # Sort by absolute value to see the biggest drivers (positive or negative)
     importance_df['Abs_Importance'] = importance_df['Importance'].abs()
@@ -276,9 +231,10 @@ if __name__ == "__main__":
     print(importance_df[['Feature', 'Importance']].head(10))
 
     # Plotting
+    # 
     plt.figure(figsize=(10, 6))
-    sns.barplot(x='Importance', y='Feature', data=importance_df.head(15), palette='viridis') 
-    
+    sns.barplot(x='Importance', y='Feature', data=importance_df.head(15), palette='viridis')
+
     plt.title(title, fontsize=15)
     plt.xlabel('Impact on Propensity (Importance/Coefficient)', fontsize=12)
     plt.ylabel('Feature', fontsize=12)
