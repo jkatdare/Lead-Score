@@ -4,15 +4,23 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 import joblib
+import yaml  
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier # Upgraded from DecisionTree
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, recall_score
 
 # --- 1. CONFIGURATION ---
-INPUT_FILE = 'synthetic_data.xlsx'
+
+# Load path from config.yaml
+with open('config.yaml', 'r') as f:
+    config = yaml.safe_load(f)
+
+# Replaces the hardcoded line 15
+INPUT_FILE = config['input_file'] 
+
 OUTPUT_DIR = os.path.join('files', 'PropensityModel')
 
 # Base columns from the file; add additional columns and upload everything to github
@@ -205,3 +213,53 @@ if __name__ == "__main__":
     print(f"   > Final Accuracy: {best_recall_model[1]['accuracy']:.2%}")
     print("   > Output directory: {OUTPUT_DIR}")
     print("----------------------------------------------------------------------")
+    
+    # ... (Your existing code ending with print("--- PIPELINE COMPLETE ---")) ...
+
+    # --- 8. FEATURE IMPORTANCE ANALYSIS ---
+    print("\n--- CALCULATING FEATURE IMPORTANCE ---")
+    
+    # Get feature names from the dataframe we created earlier
+    feature_names = X_enhanced.columns
+    
+    # Create a DataFrame to hold importance data
+    importance_df = pd.DataFrame({'Feature': feature_names})
+
+    # Check model type to extract the right metrics
+    if hasattr(best_model, 'feature_importances_'):
+        # Random Forest logic
+        importance_df['Importance'] = best_model.feature_importances_
+        title = f'Feature Importance: {best_model_name}'
+        
+    elif hasattr(best_model, 'coef_'):
+        # Logistic Regression logic (using coefficients)
+        # We take the first row [0] because it's a binary classification
+        importance_df['Importance'] = best_model.coef_[0]
+        title = f'Feature Coefficients: {best_model_name}'
+    
+    else:
+        importance_df['Importance'] = 0
+        title = 'Feature Importance Not Available'
+
+    # Sort by absolute value to see the biggest drivers (positive or negative)
+    importance_df['Abs_Importance'] = importance_df['Importance'].abs()
+    importance_df = importance_df.sort_values(by='Abs_Importance', ascending=False)
+
+    # Display the top drivers in the console
+    print(importance_df[['Feature', 'Importance']].head(10))
+
+    # Plotting
+    plt.figure(figsize=(10, 6))
+    # We color by the raw importance to see negative impact (red) vs positive impact (blue/green)
+    sns.barplot(x='Importance', y='Feature', data=importance_df, palette='viridis')
+    
+    plt.title(title, fontsize=15)
+    plt.xlabel('Impact on Propensity (Importance/Coefficient)', fontsize=12)
+    plt.ylabel('Feature', fontsize=12)
+    plt.axvline(x=0, color='black', linestyle='--', linewidth=1) # Zero line for reference
+    plt.tight_layout()
+
+    # Save the plot
+    importance_path = os.path.join(OUTPUT_DIR, 'feature_importance_best_model.png')
+    plt.savefig(importance_path)
+    print(f"   > Saved Feature Importance Plot: {importance_path}")
