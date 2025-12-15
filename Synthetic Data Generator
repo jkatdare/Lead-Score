@@ -1,0 +1,196 @@
+import pandas as pd
+import numpy as np
+from faker import Faker
+from datetime import date, timedelta
+import random
+
+# --- 1. Configuration ---
+NUM_LEADS = 10000
+OUTPUT_FILE = 'synthetic_data.xlsx'
+fake = Faker('en_US')
+TODAY = date.today()
+
+# --- 2. Data Assumptions (Correlations) ---
+OCCUPATION_TIERS = {
+    'Tier 1': [('Surgeon', (250000, 600000), ["PhD/MD/JD"]), ('C-Suite Executive', (220000, 1000000), ["Master's", "PhD/MD/JD"]), ('Investment Banker', (150000, 700000), ["Bachelor's", "Master's"]), ('Attorney (Partner)', (180000, 500000), ["PhD/MD/JD"])],
+    'Tier 2': [('Software Engineer (Senior)', (120000, 220000), ["Bachelor's", "Master's"]), ('Accountant (CPA)', (80000, 150000), ["Bachelor's", "Master's"]), ('Marketing Director', (90000, 170000), ["Bachelor's", "Master's"]), ('Pharmacist', (110000, 160000), ["PhD/MD/JD"])],
+    'Tier 3': [('Teacher', (55000, 90000), ["Bachelor's", "Master's"]), ('Nurse (RN)', (70000, 110000), ["Bachelor's"]), ('Electrician', (50000, 100000), ["High School", "Some College"]), ('Sales Representative', (45000, 120000), ["Some College", "Bachelor's"])],
+    'Tier 4': [('Administrative Assistant', (40000, 65000), ["High School", "Some College"]), ('Retail Manager', (45000, 75000), ["High School", "Some College"]), ('Customer Service Rep', (35000, 60000), ["High School"])]
+}
+MARITAL_STATUSES = ['Single', 'Married', 'Divorced']
+POLICY_TYPES = ['Term Life', 'Whole Life', 'Universal Life']
+EDUCATION_LEVELS = {"High School": 1, "Some College": 2, "Bachelor's": 3, "Master's": 4, "PhD/MD/JD": 5}
+
+
+# --- 3. Helper Functions ---
+
+def get_age(dob):
+    return TODAY.year - dob.year - ((TODAY.month, TODAY.day) < (dob.month, TODAY.day))
+
+def get_profile():
+    tier_choice = random.choices(['Tier 1', 'Tier 2', 'Tier 3', 'Tier 4'], weights=[0.1, 0.3, 0.4, 0.2], k=1)[0]
+    job, (min_inc, max_inc), ed_levels = random.choice(OCCUPATION_TIERS[tier_choice])
+    education = random.choice(ed_levels)
+    income = random.randint(min_inc, max_inc)
+    return job, education, income
+
+def get_literacy_score(education):
+    base = EDUCATION_LEVELS.get(education, 2)
+    return max(1, min(10, base * 2 + random.randint(-2, 2)))
+
+def get_life_stage(age, dependents):
+    """Determines a proxy for life stage based on age and dependents."""
+    if age < 30 and dependents == 0: return 'Young Single'
+    if age < 45 and dependents > 0: return 'New Family'
+    if age >= 45 and dependents > 0: return 'Established Family'
+    if age >= 55 and dependents == 0: return 'Pre-Retirement'
+    if age >= 65: return 'Retired'
+    return 'Established'
+
+def calculate_churn_risk_flag(data):
+    """Calculates a score based on variables and returns a binary Churn Risk Flag (1=High Risk, 0=Low Risk)."""
+    score = 0
+    
+    # --- Scoring Customer Health (Positive Score = Low Risk) ---
+    if data['Primary Policy Type'] == 'Term Life' and data['Term Policy End Date'] is not None:
+        days_to_expiry = (data['Term Policy End Date'] - TODAY).days
+        if days_to_expiry < 365 * 2: score += 18
+        elif days_to_expiry < 365 * 5: score += 8
+    if data['Net Worth'] > 500000: score += 8
+    if data['Debt-to-Income Ratio'] < 0.20: score += 7
+    if data['Annualized Premiums'] > 2000: score += 6
+    if data['Primary Policy Type'] in ['Whole Life', 'Universal Life']: score += 4
+    if data['Recently Moved']: score += 12
+    if (TODAY - data['Last Login to Portal']).days < 180: score += 9
+    if (TODAY - data['Last Policy Review']).days < 730: score += 6
+
+    # --- Negative Signals (Low Score = High Risk) ---
+    if data['Smoker Status']: score -= 3
+    if data['Net Worth'] < 100000: score -= 7
+    if data['Debt-to-Income Ratio'] > 0.40: score -= 8
+    if (TODAY - data['Last Login to Portal']).days > 730: score -= 9
+    if (TODAY - data['Last Policy Review']).days > 1825: score -= 10
+    if data['Annualized Premiums'] < 750: score -= 6
+    
+    # --- Final Classification with Noise and Skew ---
+    score += np.random.normal(0, 3) 
+    
+    # TARGET CHURN RATE IS ADJUSTED HERE TO 10%
+    base_prob_churn = 0.10 
+    
+    # We now adjust the sensitivity to achieve the 10% average.
+    churn_prob = base_prob_churn - ((score - 8) / 50) 
+    churn_prob = np.clip(churn_prob, 0.03, 0.80) # Clipped for realism
+    
+    return 1 if random.random() < churn_prob else 0
+
+# --- 4. Data Generation ---
+print(f"Generating {NUM_LEADS} master fake leads with predictive target (10% churn)... This will take a moment.")
+lead_data = []
+
+for _ in range(NUM_LEADS):
+    
+    # --- Base Demographics & Correlated Profile ---
+    dob = fake.date_of_birth(minimum_age=30, maximum_age=65)
+    age = get_age(dob)
+    occupation, education, annual_income = get_profile()
+    
+    # --- Address & Geographic (Fixed) ---
+    street = fake.street_address()
+    city = fake.city()
+    state = fake.state_abbr()
+    zip_code = fake.zipcode()
+    
+    # --- Family, Household, & Financials ---
+    marital_status = random.choices(['Single', 'Married', 'Divorced'], weights=[0.3, 0.6, 0.1], k=1)[0]
+    dependents = random.choices([0, 1, 2, 3, 4], weights=[0.4, 0.2, 0.2, 0.1, 0.1], k=1)[0] if marital_status == 'Married' else random.choices([0, 1, 2], weights=[0.6, 0.3, 0.1], k=1)[0]
+    household_income = annual_income + (annual_income * random.uniform(0.5, 1.2)) if marital_status == 'Married' else annual_income
+    net_worth = max(0, (annual_income * (age / random.randint(5, 15))) * random.uniform(0.8, 1.2))
+    investable_assets = net_worth * random.uniform(0.2, 0.7)
+    market_value_home = np.clip(household_income * random.uniform(3, 8) * np.random.normal(loc=1.0, scale=0.3), 200000, 5000000)
+    dti = np.random.beta(a=2, b=5)
+    
+    # --- Base Behavioral & Policy Data ---
+    smoker = random.choices([True, False], weights=[0.18, 0.82], k=1)[0]
+    years_as_client = random.randint(1, max(1, age - 30))
+    existing_policies = random.choices([1, 2, 3], weights=[0.7, 0.2, 0.1], k=1)[0]
+    
+    base_premium = (annual_income * 0.01) + (dependents * 150) + (age * 20)
+    if smoker: base_premium *= 1.8
+    annualized_premiums = base_premium * random.uniform(0.9, 1.1)
+    
+    # Policy Details
+    policy_type = random.choices(POLICY_TYPES, weights=[0.5, 0.3, 0.2], k=1)[0]
+    face_value = round(annual_income * random.randint(5, 15), -3)
+    
+    cash_value = 0
+    term_end_date = None
+    if policy_type == 'Term Life':
+        term_end_date = fake.date_between(start_date='+1y', end_date='+10y')
+    else: 
+        cash_value = max(0, annualized_premiums * years_as_client * random.uniform(0.7, 1.5))
+
+    last_policy_review = fake.date_between(start_date=f'-{years_as_client}y', end_date='-1y')
+    beneficiary = random.choices(['Spouse', 'Child', 'Trust', 'Parent'], weights=[0.5, 0.3, 0.1, 0.1], k=1)[0]
+    
+    # Engagement & Psychographics
+    last_login = fake.date_between(start_date='-2y', end_date='today')
+    recently_moved = random.choices([True, False], weights=[0.05, 0.95], k=1)[0]
+    comm_preference = random.choice(['Email', 'Phone', 'Mail'])
+    expressed_goal = random.choice(['Legacy Planning', 'Retirement Income', 'Mortgage Protection', 'College Funding'])
+    financial_literacy = get_literacy_score(education)
+    risk_tolerance = random.choice(['Conservative', 'Moderate', 'Aggressive'])
+    life_stage = get_life_stage(age, dependents)
+
+    # --- Calculate Target Variable ---
+    target_data = {
+        'Primary Policy Type': policy_type, 'Term Policy End Date': term_end_date, 'Net Worth': net_worth,
+        'Debt-to-Income Ratio': dti, 'Annualized Premiums': annualized_premiums, 'Smoker Status': smoker,
+        'Last Login to Portal': last_login, 'Last Policy Review': last_policy_review,
+        'Recently Moved': recently_moved
+    }
+    churn_risk_flag = calculate_churn_risk_flag(target_data)
+
+    # --- Add to List ---
+    lead_data.append({
+        'First Name': fake.first_name(), 'Last Name': fake.last_name(), 'Date of Birth': dob, 'Age': age,
+        'Street Address': street, 'City': city, 'State': state, 'Zip Code': zip_code,
+        'Marital Status': marital_status, 'Number of Dependents': dependents, 'Life Stage': life_stage,
+        'Occupation': occupation, 'Employer': fake.company(), 'Education Level': education,
+        'Annual Income': round(annual_income, 2), 'Household Annual Income': round(household_income, 2),
+        'Net Worth': round(net_worth, 2), 'Investable Assets': round(investable_assets, 2),
+        'Debt-to-Income Ratio': round(dti, 3), 'Market Value of Home': round(market_value_home, 2),
+        'Smoker Status': smoker, 'Risk Tolerance': risk_tolerance, 'Years as Client': years_as_client, 
+        'Number of Existing Policies': existing_policies, 'Annualized Premiums': round(annualized_premiums, 2),
+        'Primary Policy Type': policy_type, 'Policy Face Value': round(face_value, 2), 
+        'Term Policy End Date': term_end_date, 'Cash Value': round(cash_value, 2),
+        'Last Policy Review': last_policy_review, 'Beneficiary Relationship': beneficiary,
+        'Last Login to Portal': last_login, 'Communication Preference': comm_preference, 
+        'Recently Moved': recently_moved, 'Expressed Goal': expressed_goal,
+        'Financial Literacy Score': financial_literacy,
+        'Churn': churn_risk_flag # FINAL TARGET COLUMN
+    })
+
+print("Lead generation complete. Creating DataFrame...")
+
+# --- 5. Create and Save Excel File ---
+df = pd.DataFrame(lead_data)
+
+# Set the column order
+final_columns = [
+    'First Name', 'Last Name', 'Date of Birth', 'Age', 'Street Address', 'City', 'State', 'Zip Code',
+    'Marital Status', 'Number of Dependents', 'Life Stage', 'Occupation', 'Employer', 'Education Level', 
+    'Financial Literacy Score', 'Annual Income', 'Household Annual Income', 'Net Worth', 
+    'Investable Assets', 'Debt-to-Income Ratio', 'Market Value of Home', 'Smoker Status', 
+    'Risk Tolerance', 'Expressed Goal', 'Last Login to Portal', 'Communication Preference', 
+    'Recently Moved', 'Years as Client', 'Number of Existing Policies', 'Annualized Premiums',
+    'Primary Policy Type', 'Policy Face Value', 'Term Policy End Date', 'Cash Value',
+    'Last Policy Review', 'Beneficiary Relationship',
+    'Churn' # FINAL TARGET
+]
+df = df[final_columns]
+
+print(f"Saving data to {OUTPUT_FILE}...")
+df.to_excel(OUTPUT_FILE, index=False)
+
+print(f"\nSuccess! Your file '{OUTPUT_FILE}' with {NUM_LEADS} leads is ready.")
