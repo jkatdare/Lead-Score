@@ -1,8 +1,10 @@
+# requirements.txt content
 streamlit
 matplotlib
 seaborn
+pyyaml
+# Add other necessary packages like:
 pandas
 numpy
-scikit-learn
+scikit-learn 
 azure-cosmos
-yaml
