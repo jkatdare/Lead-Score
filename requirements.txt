@@ -3,6 +3,7 @@ streamlit
 matplotlib
 seaborn
 pyyaml
+openpyxl
 # Add other necessary packages like:
 pandas
 numpy
