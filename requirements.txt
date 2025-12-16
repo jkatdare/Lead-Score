@@ -1,7 +1,6 @@
-# requirements.txt content
 streamlit
 matplotlib
-# Add any other packages your model or app uses:
+seaborn
 pandas
 numpy
 scikit-learn
